@@ -94,6 +94,45 @@ SPLIT_MODEM_MODELS = {
     "iPhone19,7": "US units shipped the Qualcomm X80, other regions the Apple C2",
 }
 
+
+# Sales-region code from the model number suffix (MJXQ4>>X<</A). It is fixed in
+# hardware, not a setting, so it never changes on a given phone. Partial list;
+# an unknown code is shown as-is.
+REGION_CODES = {
+    "LL": "United States",
+    "X": "Australia / New Zealand",
+    "B": "United Kingdom / Ireland",
+    "C": "Canada",
+    "J": "Japan",
+    "ZP": "Hong Kong / Macau",
+    "CH": "China mainland",
+    "T": "Italy",
+    "DN": "Germany",
+    "F": "France",
+    "Y": "Spain",
+    "KH": "South Korea",
+    "ZA": "Singapore",
+    "IN": "India",
+}
+
+
+def region_label(code):
+    """'X/A' -> 'X/A (Australia / New Zealand)'."""
+    if not code:
+        return code
+    name = REGION_CODES.get(code.split("/")[0].upper())
+    return f"{code} ({name})" if name else code
+
+
+# "t8160" is Apple's internal silicon part number for the SoC; ChipID 0x8160 is
+# the same number. The marketing name is not stored anywhere on the device, so
+# it comes from this table, keyed on the model. Reference data, like MODEM_PARTS.
+SOC_NAMES = {
+    "iPhone19,2": "Apple A20 Pro",
+    "iPhone19,3": "Apple A20 Pro",
+    "iPhone19,7": "Apple A20 Pro",
+}
+
 # Device-tree nodes holding a component authentication IC. The name is an Apple
 # codename that changes between generations, so these are a starting point and
 # the tree is also scanned for anything matching.
@@ -149,13 +188,20 @@ async def call(fn, *args, **kwargs):
 
 async def connect(udid):
     create_using_usbmux = require("pymobiledevice3.lockdown", "create_using_usbmux")
-    try:
-        return await call(create_using_usbmux, serial=udid)
-    except SystemExit:
-        raise
-    except Exception as exc:  # noqa: BLE001 - surface whatever usbmux says
-        die(f"could not connect to the device: {exc}\n"
-            "Check that it is plugged in, unlocked, and that you tapped Trust.")
+    # usbmuxd intermittently refuses a connection that succeeds on a retry a
+    # moment later, so do not fail the run on the first refusal.
+    last = None
+    for attempt in range(3):
+        try:
+            return await call(create_using_usbmux, serial=udid)
+        except SystemExit:
+            raise
+        except Exception as exc:  # noqa: BLE001 - surface whatever usbmux says
+            last = exc
+            if attempt < 2:
+                await asyncio.sleep(0.6 * (attempt + 1))
+    die(f"could not connect to the device after 3 attempts: {last}\n"
+        "Check that it is plugged in, unlocked, and that you tapped Trust.")
 
 
 async def get_value(lockdown, key=None, domain=None):
@@ -273,7 +319,7 @@ def classify(serial, table):
 # Collectors
 # ---------------------------------------------------------------------------
 
-async def collect_device(lockdown):
+async def collect_device(lockdown, bulk):
     keys = {
         "device_name": "DeviceName",
         "product_type": "ProductType",
@@ -290,7 +336,9 @@ async def collect_device(lockdown):
     }
     out = {}
     for label, key in keys.items():
-        out[label] = await get_value(lockdown, key=key)
+        out[label] = bulk.get(key) if key in bulk else await get_value(lockdown, key=key)
+    out["region_label"] = region_label(out.get("region"))
+    out["soc_name"] = SOC_NAMES.get(out.get("product_type"))
     return out
 
 
@@ -351,6 +399,17 @@ async def collect_display(diag):
     return out
 
 
+async def collect_gpu(diag):
+    """The GPU generation is in the accelerator's class name, e.g. G19P."""
+    tree = await read_entry(diag, plane="IOService")
+    if not tree:
+        return None
+    for name, _parent, _node in walk_tree(tree):
+        if name and name.startswith("AGXAccelerator"):
+            return name
+    return None
+
+
 async def collect_pci(diag):
     """Every PCIe device, with the vendor ID that says whose silicon it is."""
     devices = []
@@ -375,19 +434,21 @@ async def collect_pci(diag):
     return devices
 
 
-async def collect_modem(lockdown, diag, pci_devices):
-    product_type = await get_value(lockdown, key="ProductType")
+async def collect_modem(lockdown, diag, pci_devices, bulk):
+    product_type = bulk.get("ProductType")
     out = {
         "product_type": product_type,
         "maker": None,
         "part": None,
-        "chip_id": await get_value(lockdown, key="BasebandChipID"),
-        "cert_id": await get_value(lockdown, key="BasebandCertId"),
-        "firmware": await get_value(lockdown, key="BasebandVersion"),
-        "status": await get_value(lockdown, key="BasebandStatus"),
+        # BasebandChipID raises MissingValueError as a single-key read but is
+        # present in the full value dictionary, so read it from there.
+        "chip_id": bulk.get("BasebandChipID"),
+        "cert_id": bulk.get("BasebandCertId"),
+        "firmware": bulk.get("BasebandVersion"),
+        "status": bulk.get("BasebandStatus"),
         "serial": None, "pci": None, "radio_type": None, "compatible": None,
     }
-    serial = await get_value(lockdown, key="BasebandSerialNumber")
+    serial = bulk.get("BasebandSerialNumber")
     if isinstance(serial, (bytes, bytearray)):
         serial = serial.hex().upper()
     out["serial"] = serial
@@ -481,11 +542,16 @@ def report_device(d):
     row("Model", f"{d.get('product_type')}"
         + (f"  ({marketing})" if marketing else ""))
     row("Hardware model", d.get("hardware_model"))
-    row("SoC", f"{d.get('soc')} (ChipID 0x{d['chip_id']:04X})"
-        if d.get("chip_id") else d.get("soc"))
+    soc = d.get("soc") or ""
+    if d.get("soc_name"):
+        soc = f"{soc}  ({d['soc_name']})"
+    row("SoC", soc)
+    row("SoC chip ID", f"0x{d['chip_id']:04X} ({d['chip_id']})"
+        if d.get("chip_id") else None)
+    row("GPU", d.get("gpu"))
     row("Board ID", d.get("board_id"))
     row("iOS", f"{d.get('ios_version')} ({d.get('build')})")
-    row("Region", d.get("region"))
+    row("Region", d.get("region_label") or d.get("region"))
     row("Bootloader", d.get("bootloader"))
     row("Production SoC", d.get("production_soc"))
 
@@ -598,6 +664,24 @@ def report_storage(s):
 # Entry point
 # ---------------------------------------------------------------------------
 
+
+
+def write_png(result, path, theme):
+    try:
+        import render
+    except ImportError:
+        die("render.py is missing; keep it next to iphone_audit.py")
+    try:
+        import matplotlib  # noqa: F401
+    except ImportError:
+        die("--png needs matplotlib. Install it with:\n"
+            "    .venv/bin/pip install matplotlib")
+    model = MODEL_NAMES.get((result.get("device") or {}).get("product_type"))
+    render.render(result, path, theme=theme, model_name=model)
+    # stderr, so that --json --png leaves stdout as valid JSON.
+    print(f"wrote {path}", file=sys.stderr)
+
+
 async def show_devices():
     list_devices = require("pymobiledevice3.usbmux", "list_devices")
     devices = await call(list_devices)
@@ -627,13 +711,15 @@ async def run(args):
     ctx = service.__aenter__() if hasattr(service, "__aenter__") else None
     diag = await ctx if ctx else service.__enter__()
     try:
+        bulk = await get_value(lockdown) or {}
         if "device" in wanted:
-            result["device"] = await collect_device(lockdown)
+            result["device"] = await collect_device(lockdown, bulk)
+            result["device"]["gpu"] = await collect_gpu(diag)
         pci = await collect_pci(diag) if {"modem", "wireless"} & set(wanted) else []
         if "display" in wanted:
             result["display"] = await collect_display(diag)
         if "modem" in wanted:
-            result["modem"] = await collect_modem(lockdown, diag, pci)
+            result["modem"] = await collect_modem(lockdown, diag, pci, bulk)
         if "wireless" in wanted:
             result["wireless"] = await collect_wireless(pci)
         if "battery" in wanted:
@@ -648,6 +734,8 @@ async def run(args):
 
     if args.json:
         print(json.dumps(result, indent=2, default=str))
+        if args.png:
+            write_png(result, args.png, args.theme)
         return 0
 
     if "device" in result:
@@ -668,6 +756,8 @@ async def run(args):
         for i, field in enumerate(result["display"]["panel_id_fields"]):
             print(f"  [{i}] {field}")
     print()
+    if args.png:
+        write_png(result, args.png, args.theme)
     return 0
 
 
@@ -680,6 +770,10 @@ def main():
     ap.add_argument("--raw", action="store_true", help="also print the Panel_ID breakdown")
     ap.add_argument("--section", action="append", choices=SECTIONS,
                     help="limit to one section, repeatable")
+    ap.add_argument("--png", metavar="FILE",
+                    help="also write the report as a PNG")
+    ap.add_argument("--theme", choices=("light", "dark"), default="light",
+                    help="PNG colour scheme (default: light)")
     args = ap.parse_args()
     sys.exit(asyncio.run(run(args)))
 

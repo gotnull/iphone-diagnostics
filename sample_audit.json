@@ -1,0 +1,131 @@
+{
+  "device": {
+    "device_name": "Example iPhone",
+    "product_type": "iPhone19,7",
+    "ios_version": "27.0",
+    "build": "24A437",
+    "serial_number": "XXXXXXXXXX",
+    "region": "X/A",
+    "hardware_model": "V64sAP",
+    "soc": "t8160",
+    "chip_id": 33120,
+    "board_id": 18,
+    "bootloader": "mBoot-20457.2.37",
+    "production_soc": true,
+    "region_label": "X/A (Australia / New Zealand)",
+    "soc_name": "Apple A20 Pro",
+    "gpu": "AGXAcceleratorG19P"
+  },
+  "display": {
+    "panel_serial": "G9N0000000000000AA",
+    "source": "mogul-display certificate (Apple-signed)",
+    "auth_ic_serial": "AABBCCDDEEFF",
+    "auth_node": "mogul-display",
+    "auth_passed": true,
+    "auth_ca": "Display CA M1",
+    "panel_id_string": "G9N0000000000000AA+A+A18B00W0002000000220+GR90000000000000DD+9000000000B4S7B3703829A19+6306T0000000NL000000AG7MF10809SXS0000000U0000000120000000M4000NQAK2P2660B4LGM6A66FE031",
+    "panel_id_fields": [
+      "G9N0000000000000AA",
+      "A",
+      "A18B00W0002000000220",
+      "GR90000000000000DD",
+      "9000000000B4S7B3703829A19",
+      "6306T0000000NL000000AG7MF10809SXS0000000U0000000120000000M4000NQAK2P2660B4LGM6A66FE031"
+    ],
+    "device_tree_ids": {
+      "panel-vendor-id": 234,
+      "panel-device-id": 81,
+      "panel-build-id": 161,
+      "panel-program-id": 121,
+      "panel-variant-id": 0
+    },
+    "ppi": 460.0
+  },
+  "modem": {
+    "product_type": "iPhone19,7",
+    "maker": "Apple",
+    "part": "C2",
+    "chip_id": 16416,
+    "cert_id": 4,
+    "firmware": "1.01.06",
+    "status": "BBInfoAvailable",
+    "serial": "1EE0680AAAF8180000000000",
+    "pci": {
+      "node": "baseband-pcie-leda",
+      "vendor_id": 4203,
+      "vendor": "Apple",
+      "device_id": 7174,
+      "class_code": 868352,
+      "revision": 1
+    },
+    "radio_type": "int2",
+    "compatible": "baseband,int1",
+    "region_split": "US units shipped the Qualcomm X80, other regions the Apple C2"
+  },
+  "wireless": [
+    {
+      "node": "centauri-alpha",
+      "vendor_id": 4203,
+      "vendor": "Apple",
+      "device_id": 6402,
+      "class_code": 860160,
+      "revision": 1
+    },
+    {
+      "node": "centauri-beta",
+      "vendor_id": 4203,
+      "vendor": "Apple",
+      "device_id": 6403,
+      "class_code": 856320,
+      "revision": 1
+    },
+    {
+      "node": "centauri-control",
+      "vendor_id": 4203,
+      "vendor": "Apple",
+      "device_id": 6401,
+      "class_code": 16711680,
+      "revision": 1
+    }
+  ],
+  "battery": {
+    "serial": "F8Y0000000000000BB",
+    "manufacturer_data": "G8V0000000000000CC",
+    "cycle_count": 2,
+    "design_capacity_mah": 5335,
+    "full_charge_capacity_mah": 5485,
+    "nominal_capacity_mah": 5442,
+    "current_charge_pct": 100,
+    "reported_health_pct": 100,
+    "is_charging": false,
+    "voltage_mv": 4506,
+    "measured_health_pct": 102.8
+  },
+  "storage": {
+    "model": "APPLE SSD AP0256Z",
+    "serial": "0000000000000000",
+    "firmware": "3975.0.3",
+    "vendor": "Apple",
+    "interconnect": "Apple Fabric",
+    "encryption": "AES-XTS",
+    "status": "Ready",
+    "bytes_available": 114418307072,
+    "nand_info": {
+      "records": 3379,
+      "bytes_consumed": 65536,
+      "bytes_total": 65536,
+      "strings": {
+        "0x02a8": [
+          "3975.0.39",
+          "01.2"
+        ],
+        "0x0357": [
+          "3832.0.0.101.1"
+        ],
+        "0x03c1": [
+          "24A437"
+        ]
+      }
+    }
+  }
+}

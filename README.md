@@ -34,8 +34,15 @@ over USB, unlocked, and paired (tap Trust the first time).
     .venv/bin/python iphone_audit.py --section display   # one section, repeatable
     .venv/bin/python iphone_audit.py --json      # machine-readable
     .venv/bin/python iphone_audit.py --raw       # add the Panel_ID breakdown
+    .venv/bin/python iphone_audit.py --png report.png            # PNG report card
+    .venv/bin/python iphone_audit.py --png report.png --theme dark
 
 Sections: `device`, `display`, `modem`, `wireless`, `battery`, `storage`.
+
+`--png` needs matplotlib (`.venv/bin/pip install matplotlib`). It writes a
+report card with a row of headline tiles over the detail tables, in light or
+dark. `--json --png` is fine together: the "wrote ..." line goes to stderr so
+stdout stays valid JSON.
 
 ## Example
 
@@ -67,6 +74,23 @@ Sections: `device`, `display`, `modem`, `wireless`, `battery`, `storage`.
       Design capacity        5335 mAh
       Full charge capacity   5489 mAh
       Measured health        102.9% of design
+
+## The PNG report
+
+The page width is derived from measured text rather than fixed: every label,
+value, tile and header string is measured first, and the canvas is widened until
+all of them fit. Nothing is ever shortened or ellipsised to make it fit, and no
+two strings can collide, because each card is at least as wide as its widest
+label + value pair plus the gap.
+
+`test_layout.py` checks that property without rendering anything:
+
+    .venv/bin/python iphone_audit.py --json > audit.json
+    .venv/bin/python test_layout.py audit.json
+
+It reports the tightest gap in the whole page and fails if any is negative.
+Running it against the bundled `sample_audit.json` (dummy serials) needs no
+phone attached.
 
 ## How the display check works
 
@@ -132,6 +156,25 @@ comes from the PCI vendor ID, which is hardware talking. The marketing name
 (C1, C1X, C2, Snapdragon X80) comes from a lookup table built from teardowns and
 Apple's own statements, because the phone never names its modem part. If a model
 is missing from that table the tool prints the maker alone rather than guessing.
+
+## Reference tables vs measured values
+
+Three things in the output are looked up rather than read off the phone, and
+each is marked as such:
+
+- the **marketing model name** (iPhone 18 Pro Max), from Xcode's CoreSimulator
+  device profiles
+- the **SoC name** (Apple A20 Pro). `t8160` is Apple's internal silicon part
+  number and `ChipID 0x8160` is the same value; the marketing name is not
+  stored anywhere on the device
+- the **modem part name** (C2, Snapdragon X80), as described above
+
+Everything else, including the GPU generation (`AGXAcceleratorG19P`), the PCI
+vendor IDs and every serial, is read from the device.
+
+`Region` is the sales-region code from the model number suffix, so `X/A` is
+Australia / New Zealand on a unit whose retail code ends `X/A`. It is fixed in
+hardware and never changes.
 
 ## Battery
 

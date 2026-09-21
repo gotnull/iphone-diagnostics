@@ -4,3 +4,7 @@ __pycache__/
 venv/
 *.egg-info/
 .DS_Store
+
+# Generated reports contain device serials.
+*.png
+audit.json
