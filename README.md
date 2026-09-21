@@ -9,8 +9,18 @@ No jailbreak, no Developer Mode, nothing installed on the phone.
 
 ## Install
 
-    pip install pymobiledevice3
-    python3 iphone_audit.py
+Homebrew and system Python builds block `pip install` (PEP 668), so use a
+virtual environment:
+
+    python3 -m venv .venv
+    .venv/bin/pip install -r requirements.txt
+    .venv/bin/python iphone_audit.py
+
+Or with uv:
+
+    uv venv .venv
+    uv pip install --python .venv/bin/python -r requirements.txt
+    .venv/bin/python iphone_audit.py
 
 Works on macOS, Linux and Windows. macOS ships the usbmux daemon; on Linux and
 Windows you need `usbmuxd` or Apple Devices/iTunes. The phone must be plugged in
@@ -18,12 +28,12 @@ over USB, unlocked, and paired (tap Trust the first time).
 
 ## Usage
 
-    python3 iphone_audit.py                      # everything
-    python3 iphone_audit.py --list               # attached devices
-    python3 iphone_audit.py --udid UDID          # pick one
-    python3 iphone_audit.py --section display    # one section, repeatable
-    python3 iphone_audit.py --json               # machine-readable
-    python3 iphone_audit.py --raw                # add the Panel_ID breakdown
+    .venv/bin/python iphone_audit.py             # everything
+    .venv/bin/python iphone_audit.py --list      # attached devices
+    .venv/bin/python iphone_audit.py --udid UDID # pick one
+    .venv/bin/python iphone_audit.py --section display   # one section, repeatable
+    .venv/bin/python iphone_audit.py --json      # machine-readable
+    .venv/bin/python iphone_audit.py --raw       # add the Panel_ID breakdown
 
 Sections: `device`, `display`, `modem`, `wireless`, `battery`, `storage`.
 
@@ -31,7 +41,7 @@ Sections: `device`, `display`, `modem`, `wireless`, `battery`, `storage`.
 
     Device
     ------
-      Model                  iPhone19,7
+      Model                  iPhone19,7  (iPhone 18 Pro Max)
       SoC                    t8160 (ChipID 0x8160)
       iOS                    27.0 (24A437)
 
@@ -46,7 +56,7 @@ Sections: `device`, `display`, `modem`, `wireless`, `battery`, `storage`.
 
     Modem
     -----
-      Silicon                Apple   [PCI 106b:1c06]
+      Part                   Apple C2   [PCI 106b:1c06]
       PCIe node              baseband-pcie-leda
       Radio type             int2
       Firmware               1.01.06
@@ -98,17 +108,30 @@ one, open an issue with the `--json` output.
 
 ## Modem and wireless
 
-Every PCIe device is listed with its PCI-SIG vendor ID, which is the most direct
-evidence of whose silicon is on the bus. On an iPhone 18 Pro Max all of them
-come back as `0x106B`, Apple's own vendor ID:
+This is the interesting one on the iPhone 18 Pro Max, because Apple shipped two
+different modems in the same phone: US units got Qualcomm's Snapdragon X80,
+every other region got the Apple C2. Nothing in Settings tells you which one you
+have.
 
-    baseband-pcie-leda     Apple   [PCI 106b:1c06]
+Every PCIe device is listed with its PCI-SIG vendor ID, read straight off the
+bus, so it reflects the part actually fitted:
+
+    Part                   Apple C2   [PCI 106b:1c06]
+    PCIe node              baseband-pcie-leda
+
     centauri-alpha         Apple   [PCI 106b:1902]
     centauri-beta          Apple   [PCI 106b:1903]
     centauri-control       Apple   [PCI 106b:1901]
 
-A Qualcomm modem enumerates as `0x17CB` and a Broadcom wireless part as
-`0x14E4`. Neither appears.
+`0x106B` is Apple. A Qualcomm modem enumerates as `0x17CB` and a Broadcom
+wireless part as `0x14E4`. On this generation neither appears anywhere, so the
+modem and the Wi-Fi/Bluetooth combo are both first-party silicon.
+
+Two layers go into the "Part" line, and they are not equally solid. The maker
+comes from the PCI vendor ID, which is hardware talking. The marketing name
+(C1, C1X, C2, Snapdragon X80) comes from a lookup table built from teardowns and
+Apple's own statements, because the phone never names its modem part. If a model
+is missing from that table the tool prints the maker alone rather than guessing.
 
 ## Battery
 

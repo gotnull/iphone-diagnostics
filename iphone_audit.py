@@ -55,6 +55,45 @@ PCI_VENDORS = {
     0x1217: "O2 Micro",
 }
 
+
+# Marketing names, verified against the CoreSimulator device profiles that ship
+# with Xcode. iPhone19,3 and iPhone19,7 are both iPhone 18 Pro Max.
+MODEL_NAMES = {
+    "iPhone17,5": "iPhone 16e",
+    "iPhone18,1": "iPhone 17 Pro",
+    "iPhone18,2": "iPhone 17 Pro Max",
+    "iPhone18,3": "iPhone 17",
+    "iPhone18,4": "iPhone Air",
+    "iPhone18,5": "iPhone 17e",
+    "iPhone19,2": "iPhone 18 Pro",
+    "iPhone19,3": "iPhone 18 Pro Max",
+    "iPhone19,7": "iPhone 18 Pro Max",
+}
+
+# The phone never names its modem part. The maker is read from the PCI bus; this
+# maps (model, maker) onto the part named in teardowns and Apple's own
+# statements. Reference data, not something read off the device.
+MODEM_PARTS = {
+    ("iPhone17,5", "Apple"): "C1",
+    ("iPhone18,4", "Apple"): "C1X",
+    ("iPhone18,5", "Apple"): "C1X",
+    ("iPhone18,1", "Qualcomm"): "Snapdragon X80",
+    ("iPhone18,2", "Qualcomm"): "Snapdragon X80",
+    ("iPhone18,3", "Qualcomm"): "Snapdragon X80",
+    ("iPhone19,2", "Apple"): "C2",
+    ("iPhone19,3", "Apple"): "C2",
+    ("iPhone19,3", "Qualcomm"): "Snapdragon X80",
+    ("iPhone19,7", "Apple"): "C2",
+    ("iPhone19,7", "Qualcomm"): "Snapdragon X80",
+}
+
+# Models sold with different modems by region, where reading the bus is the only
+# way to know which part is actually fitted.
+SPLIT_MODEM_MODELS = {
+    "iPhone19,3": "US units shipped the Qualcomm X80, other regions the Apple C2",
+    "iPhone19,7": "US units shipped the Qualcomm X80, other regions the Apple C2",
+}
+
 # Device-tree nodes holding a component authentication IC. The name is an Apple
 # codename that changes between generations, so these are a starting point and
 # the tree is also scanned for anything matching.
@@ -72,6 +111,30 @@ def die(msg, code=1):
     sys.exit(code)
 
 
+INSTALL_HINT = """pymobiledevice3 is not installed for this interpreter.
+
+Homebrew and system Python installs block `pip install` (PEP 668), so use a
+virtual environment:
+
+    python3 -m venv .venv
+    .venv/bin/pip install pymobiledevice3
+    .venv/bin/python iphone_audit.py
+
+or, if you have uv:
+
+    uv venv .venv && uv pip install --python .venv/bin/python pymobiledevice3
+    .venv/bin/python iphone_audit.py
+"""
+
+
+def require(module, attr):
+    """Import lazily so a missing dependency prints advice, not a traceback."""
+    try:
+        return getattr(__import__(module, fromlist=[attr]), attr)
+    except ImportError:
+        die(INSTALL_HINT)
+
+
 # ---------------------------------------------------------------------------
 # Transport
 # ---------------------------------------------------------------------------
@@ -85,10 +148,7 @@ async def call(fn, *args, **kwargs):
 
 
 async def connect(udid):
-    try:
-        from pymobiledevice3.lockdown import create_using_usbmux
-    except ImportError:
-        die("pymobiledevice3 is not installed. Run: pip install pymobiledevice3")
+    create_using_usbmux = require("pymobiledevice3.lockdown", "create_using_usbmux")
     try:
         return await call(create_using_usbmux, serial=udid)
     except SystemExit:
@@ -316,7 +376,11 @@ async def collect_pci(diag):
 
 
 async def collect_modem(lockdown, diag, pci_devices):
+    product_type = await get_value(lockdown, key="ProductType")
     out = {
+        "product_type": product_type,
+        "maker": None,
+        "part": None,
         "chip_id": await get_value(lockdown, key="BasebandChipID"),
         "cert_id": await get_value(lockdown, key="BasebandCertId"),
         "firmware": await get_value(lockdown, key="BasebandVersion"),
@@ -334,6 +398,10 @@ async def collect_modem(lockdown, diag, pci_devices):
         out["compatible"] = as_text(bb.get("compatible"))
 
     out["pci"] = next((d for d in pci_devices if "baseband" in d["node"]), None)
+    if out["pci"]:
+        out["maker"] = out["pci"]["vendor"]
+        out["part"] = MODEM_PARTS.get((product_type, out["maker"]))
+    out["region_split"] = SPLIT_MODEM_MODELS.get(product_type)
     return out
 
 
@@ -409,7 +477,9 @@ def row(label, value, note=""):
 def report_device(d):
     hdr("Device")
     row("Name", d.get("device_name"))
-    row("Model", d.get("product_type"))
+    marketing = MODEL_NAMES.get(d.get("product_type"))
+    row("Model", f"{d.get('product_type')}"
+        + (f"  ({marketing})" if marketing else ""))
     row("Hardware model", d.get("hardware_model"))
     row("SoC", f"{d.get('soc')} (ChipID 0x{d['chip_id']:04X})"
         if d.get("chip_id") else d.get("soc"))
@@ -446,8 +516,9 @@ def report_modem(m):
     hdr("Modem")
     pci = m.get("pci")
     if pci:
-        vendor = pci["vendor"] or f"unknown vendor 0x{pci['vendor_id']:04X}"
-        row("Silicon", f"{vendor}   [PCI {pci['vendor_id']:04x}:{pci['device_id']:04x}]")
+        maker = pci["vendor"] or f"unknown vendor 0x{pci['vendor_id']:04X}"
+        named = f"{maker} {m['part']}" if m.get("part") else maker
+        row("Part", f"{named}   [PCI {pci['vendor_id']:04x}:{pci['device_id']:04x}]")
         row("PCIe node", pci["node"])
     row("Baseband chip ID", f"{m['chip_id']} (0x{m['chip_id']:04X})"
         if isinstance(m.get("chip_id"), int) else m.get("chip_id"))
@@ -456,9 +527,14 @@ def report_modem(m):
     row("Firmware", m.get("firmware"))
     row("Cert ID", m.get("cert_id"))
     row("Status", m.get("status"))
-    if pci and pci["vendor_id"] == 0x106B:
-        print("  note: PCI vendor 0x106B is Apple. A Qualcomm modem would")
-        print("        enumerate as 0x17CB.")
+    if m.get("region_split"):
+        print(f"  note: {m['product_type']} ships different modems by region.")
+        print(f"        {m['region_split']}.")
+        print("        The PCI vendor ID above is read off the bus, so it is the")
+        print("        part actually fitted to this phone.")
+    elif pci and not m.get("part"):
+        print("  note: maker read from the PCI vendor ID. The part name is not in")
+        print("        the reference table for this model.")
 
 
 def report_wireless(devices):
@@ -523,7 +599,7 @@ def report_storage(s):
 # ---------------------------------------------------------------------------
 
 async def show_devices():
-    from pymobiledevice3.usbmux import list_devices
+    list_devices = require("pymobiledevice3.usbmux", "list_devices")
     devices = await call(list_devices)
     if not devices:
         die("no devices attached")
@@ -540,7 +616,8 @@ async def run(args):
         await show_devices()
         return 0
 
-    from pymobiledevice3.services.diagnostics import DiagnosticsService
+    DiagnosticsService = require("pymobiledevice3.services.diagnostics",
+                                 "DiagnosticsService")
 
     wanted = args.section or SECTIONS
     lockdown = await connect(args.udid)
