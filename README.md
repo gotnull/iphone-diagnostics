@@ -75,6 +75,18 @@ stdout stays valid JSON.
       Full charge capacity   5489 mAh
       Measured health        102.9% of design
 
+## If it fails to connect
+
+usbmuxd refuses connections intermittently, usually when runs come back to
+back. The tool retries the whole session three times before giving up, and
+prints a line to stderr when it does. If all three fail:
+
+    error: could not read the device after 3 attempts: ...
+
+unplug and replug the phone, make sure it is unlocked, and check you tapped
+Trust. The retry covers both the lockdown handshake and the per-service
+connect, which are two separate points where usbmux can refuse.
+
 ## The PNG report
 
 The page width is derived from measured text rather than fixed: every label,

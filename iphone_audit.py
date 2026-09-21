@@ -144,6 +144,10 @@ CN_OID = b"\x06\x03\x55\x04\x03"  # OBJECT IDENTIFIER 2.5.4.3 (commonName)
 
 SECTIONS = ["device", "display", "modem", "wireless", "battery", "storage"]
 
+# usbmuxd refuses connections intermittently; this is how many whole-session
+# attempts are made before giving up.
+RETRIES = 3
+
 
 def die(msg, code=1):
     print(f"error: {msg}", file=sys.stderr)
@@ -188,20 +192,7 @@ async def call(fn, *args, **kwargs):
 
 async def connect(udid):
     create_using_usbmux = require("pymobiledevice3.lockdown", "create_using_usbmux")
-    # usbmuxd intermittently refuses a connection that succeeds on a retry a
-    # moment later, so do not fail the run on the first refusal.
-    last = None
-    for attempt in range(3):
-        try:
-            return await call(create_using_usbmux, serial=udid)
-        except SystemExit:
-            raise
-        except Exception as exc:  # noqa: BLE001 - surface whatever usbmux says
-            last = exc
-            if attempt < 2:
-                await asyncio.sleep(0.6 * (attempt + 1))
-    die(f"could not connect to the device after 3 attempts: {last}\n"
-        "Check that it is plugged in, unlocked, and that you tapped Trust.")
+    return await call(create_using_usbmux, serial=udid)
 
 
 async def get_value(lockdown, key=None, domain=None):
@@ -688,29 +679,42 @@ async def show_devices():
     if not devices:
         die("no devices attached")
     for dev in devices:
-        lockdown = await connect(dev.serial)
+        try:
+            lockdown = await connect(dev.serial)
+        except Exception as exc:  # noqa: BLE001
+            print(f"{dev.serial}  <unreadable: {exc}>")
+            continue
         name = await get_value(lockdown, key="DeviceName")
         ptype = await get_value(lockdown, key="ProductType")
         version = await get_value(lockdown, key="ProductVersion")
         print(f"{dev.serial}  {name}  ({ptype}, iOS {version})")
 
 
-async def run(args):
-    if args.list:
-        await show_devices()
-        return 0
+async def close_quietly(obj):
+    if obj is None:
+        return
+    try:
+        result = obj.close()
+        if inspect.isawaitable(result):
+            await result
+    except Exception:  # noqa: BLE001 - cleanup must not mask the real error
+        pass
 
+
+async def gather(args, wanted):
+    """One full session: connect, open diagnostics, collect, close."""
     DiagnosticsService = require("pymobiledevice3.services.diagnostics",
                                  "DiagnosticsService")
-
-    wanted = args.section or SECTIONS
-    lockdown = await connect(args.udid)
+    lockdown = service = None
     result = {}
-
-    service = DiagnosticsService(lockdown)
-    ctx = service.__aenter__() if hasattr(service, "__aenter__") else None
-    diag = await ctx if ctx else service.__enter__()
     try:
+        lockdown = await connect(args.udid)
+        service = DiagnosticsService(lockdown)
+        if hasattr(service, "__aenter__"):
+            diag = await service.__aenter__()
+        else:
+            diag = service.__enter__()
+
         bulk = await get_value(lockdown) or {}
         if "device" in wanted:
             result["device"] = await collect_device(lockdown, bulk)
@@ -726,11 +730,39 @@ async def run(args):
             result["battery"] = await collect_battery(diag)
         if "storage" in wanted:
             result["storage"] = await collect_storage(lockdown, diag)
+        return result
     finally:
-        if hasattr(service, "__aexit__"):
-            await service.__aexit__(None, None, None)
-        else:
-            service.__exit__(None, None, None)
+        await close_quietly(service)
+        await close_quietly(lockdown)
+
+
+async def run(args):
+    if args.list:
+        await show_devices()
+        return 0
+
+    wanted = args.section or SECTIONS
+
+    # usbmuxd intermittently refuses a connection that succeeds moments later,
+    # and it can refuse at the lockdown handshake or at any per-service
+    # connect, so retry the whole session rather than one call inside it.
+    last = None
+    for attempt in range(RETRIES):
+        try:
+            result = await gather(args, wanted)
+            break
+        except SystemExit:
+            raise
+        except Exception as exc:  # noqa: BLE001 - surface whatever usbmux says
+            last = exc
+            if attempt < RETRIES - 1:
+                print(f"connection failed ({type(exc).__name__}), retrying "
+                      f"{attempt + 2}/{RETRIES }...", file=sys.stderr)
+                await asyncio.sleep(0.8 * (attempt + 1))
+    else:
+        die(f"could not read the device after {RETRIES} attempts: {last}\n"
+            "Check that it is plugged in, unlocked, and that you tapped Trust.\n"
+            "If it keeps failing, unplug and replug, or restart usbmuxd.")
 
     if args.json:
         print(json.dumps(result, indent=2, default=str))
